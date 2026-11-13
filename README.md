@@ -37,10 +37,13 @@ You do not need a computer, developer tools, or an ISO extraction app.
 5. Tap **Play Skate 3**.
 
 Requirements: Android 13 or newer, ARM64, Vulkan, and about 8 GiB free after
-the ISO is already available. A multitouch controller is built in for phones.
-Physical and built-in gamepads remain supported. The first verified device is
-the Anbernic RG406V. This is experimental software, so other phones may need
-testing and tuning.
+the ISO is already available. A multitouch controller is built in for phones,
+with a fully custom layout editor (gear pill during gameplay). Physical and
+built-in gamepads remain supported. The first verified device is
+the Anbernic RG406V. Entry-level phones such as the **Honor X5 Plus**
+(Helio G36, 4 GB) get an automatic Ultra Low profile (216p, 30 FPS cap) — see
+[docs/LOW_END_DEVICES.md](docs/LOW_END_DEVICES.md). This is experimental
+software, so other phones may need testing and tuning.
 
 Starting with v2.0.8, the launcher checks for signed updates automatically. It
 downloads and verifies the new APK inside the app. Android still asks you to
@@ -88,11 +91,14 @@ The build uses these methods:
    version code, verifies the downloaded APK with SHA-256, and hands it to
    Android's package installer. Android also enforces the existing app-signing
    certificate. Updates never replace the extracted game directory.
-6. The handheld profile lowers scene resolution and draw distance, simplifies
-   materials, removes grass and costly post effects, reduces selected static
-   rendering work, and uses native occlusion and frame pacing. Physics, player
-   input, the board, menus, and HUD remain full-rate. The quality profile keeps
-   substantially more of the native renderer enabled for faster devices.
+6. The handheld profiles lower scene resolution and draw distance, simplify
+   materials, remove grass and costly post effects, reduce selected static
+   rendering work, and use native occlusion and frame pacing. Physics,
+   player input, the board, menus, and HUD remain full-rate. Three profiles
+   ship: Ultra Low (216p, locked 30 FPS) for entry phones such as the
+   Honor X5 Plus, Performance (288p, 60) for RG406V-class handhelds, and
+   Quality (720p) keeps substantially more of the native renderer enabled
+   for faster devices.
 
 Reverse engineering in this project uses executable analysis, function and
 shader disassembly, runtime logging, graphics captures, targeted hooks, and

@@ -4623,13 +4623,16 @@ bool EnsureOutputSizedTargets(const NativeGuestOutputRenderContext& context) {
   nrhi::Device* device = context.device;
 #if REX_PLATFORM_ANDROID
   // Keep the 3D target proportional to the selected native output shape.
-  // The RG406V profile retains its 288-line low-power budget (384x288 at
-  // 4:3); the high-end profile renders at the full 720-line output
-  // (960x720 at 4:3).
-  const bool high_end_profile =
-      std::clamp(REXCVAR_GET(skate3_android_quality_profile), 0, 1) == 1;
-  const uint32_t width_cap = high_end_profile ? 1280u : 512u;
-  const uint32_t height_cap = high_end_profile ? 720u : 288u;
+  // The high-end profile retains the 720-line output; the Performance
+  // profile keeps its 288-line low-power budget (384x288 at 4:3); the
+  // Ultra Low profile (Honor X5 Plus class) drops to a 216-line budget
+  // (288x216 at 4:3) to keep the tile-based GPU workable.
+  const int32_t android_profile =
+      std::clamp(REXCVAR_GET(skate3_android_quality_profile), 0, 2);
+  const uint32_t width_cap =
+      android_profile == 1 ? 1280u : (android_profile == 2 ? 384u : 512u);
+  const uint32_t height_cap =
+      android_profile == 1 ? 720u : (android_profile == 2 ? 216u : 288u);
   uint32_t height = std::min(context.guest_output_height, height_cap);
   uint32_t width = uint32_t((uint64_t(height) * context.guest_output_width +
                              context.guest_output_height / 2) /

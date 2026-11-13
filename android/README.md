@@ -160,22 +160,42 @@ phone-only installer instead.
 
 ## Handheld profile and controls
 
-The same APK includes two device profiles:
+The same APK includes three device profiles:
 
 | Profile | Scene | Intended hardware | Rendering |
 | --- | --- | --- | --- |
-| RG406V / Performance | 512x288 | T820/Mali-G57-class handhelds | 0.5x world/LOD range, simplified materials, no grass or expensive post effects |
+| Ultra Low | 384x216 | Entry phones (Honor X5 Plus / Helio G36 class) | 0.35x world/LOD range, simplified materials, 2 texture mip levels dropped, locked 30 FPS cap |
+| Performance | 512x288 | T820/Mali-G57-class handhelds | 0.5x world/LOD range, simplified materials, no grass or expensive post effects |
 | High-End / Quality | 1280x720 | Fast modern phones and gaming handhelds | Original world/LOD range, vegetation and full materials, 2x MSAA, shadows, SSAO, bloom and volumetrics |
 
-Open the recomp overlay with **RB + Start**, then choose **Video > Android Device
-Profile** and use **Apply & Restart**. Performance remains the default so an APK
-can boot safely on the RG406V. Both profiles keep the 60 FPS guest cap; the map,
-player physics, and board remain full-rate. The controller is presented to the
-game as an Xbox pad through SDL.
+The app auto-selects the profile at boot from reported RAM and CPU identity
+(a 4 GB Honor X5 Plus lands on Ultra Low; a 6 GB+ phone lands on Quality).
+Open the recomp overlay with **RB + Start**, then choose **Video > Android
+Device Profile** and use **Apply & Restart** to override the choice. Performance
+remains the safe default for unknown devices. Quality keeps 60 FPS; Ultra Low
+locks the guest to a stable 30. The map, player physics, and board remain
+full-rate. The controller is presented to the game as an Xbox pad through SDL.
 
 High-End is deliberately demanding and is not guaranteed to sustain 60 FPS on
 every nominally compatible phone. If it overheats, crashes a GPU driver, or falls
-below full speed, return to the Performance profile.
+below full speed, return to the Performance (or Ultra Low) profile.
+See [LOW_END_DEVICES.md](../docs/LOW_END_DEVICES.md) for the entry-phone
+optimization guide, including the texture optimizer tool.
+
+### Custom touch controls
+
+During gameplay, tap the **⚙ gear pill** next to the HIDE/TOUCH pill to open
+the touch setup panel. The game receives no input while the panel is open.
+
+- **Layout**: Default, Compact, Big buttons, or Mirrored (left-handed)
+- **Button size**: S / M / L
+- **Opacity**: Low / Medium / High
+- **Haptics**: light vibration per button press
+- **Edit layout**: drag any control anywhere; positions persist across
+  restarts as fractions of the screen
+- **Reset positions**: back to the preset defaults
+
+See [LOW_END_DEVICES.md](../docs/LOW_END_DEVICES.md) for the full details.
 
 ## Experimental custom Turnip driver
 

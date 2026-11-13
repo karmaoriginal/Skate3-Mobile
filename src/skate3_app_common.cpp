@@ -125,10 +125,12 @@ REXCVAR_DEFINE_DOUBLE(skate3_ultrawide_target_aspect, 0.0, "Skate 3",
 #if defined(__ANDROID__)
 REXCVAR_DEFINE_INT32(
     skate3_android_quality_profile, 0, "Skate 3",
-    "Android device profile: 0 = RG406V / Performance (288p and aggressive "
-    "scene cuts), 1 = High-End / Quality (720p and the full native material "
-    "pipeline). Applied after restart.")
-    .range(0, 1)
+    "Android device profile: 0 = Performance (288p scene target and "
+    "aggressive scene cuts, RG406V class), 1 = High-End / Quality (720p and "
+    "the full native material pipeline), 2 = Ultra Low (216p scene target, "
+    "0.35x world/LOD, 30 FPS cap, Honor X5 Plus / Helio G36 class). "
+    "Applied after restart.")
+    .range(0, 2)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 #endif
 
@@ -644,7 +646,56 @@ void Skate3BaseApp::OnConfigurePaths(rex::PathConfig& paths) {
       {"show_fps_counter", "true"},
   };
   const int32_t android_profile =
-      std::clamp(rex::cvar::Query<int32_t>("skate3_android_quality_profile"), 0, 1);
+      std::clamp(rex::cvar::Query<int32_t>("skate3_android_quality_profile"), 0, 2);
+  // Ultra-low entry silicon (Honor X5 Plus / Helio G36 class): the
+  // Performance preset with a smaller scene target, shorter draw/LOD range,
+  // rarer static refreshes, tighter texture stores, and a locked 30 FPS cap.
+  // A stable capped 30 beats a 60 cap that dips into the teens on this class
+  // of hardware, and the smaller target keeps the tile-based GPU workable.
+  constexpr std::pair<std::string_view, std::string_view> kUltraLowPreset[] = {
+      {"skate3_native_render_scene_handheld_potato", "true"},
+      {"native_render_suppress_mode", "1"},
+      {"skate3_native_render_guest_static_refresh", "16"},
+      {"skate3_native_render_lw_update_refresh", "2"},
+      {"skate3_draw_distance_scale", "0.35"},
+      {"skate3_lod_distance_scale", "0.35"},
+      {"skate3_draw_distance_stream_probe", "0"},
+      {"skate3_native_render_scene_msaa", "1"},
+      {"skate3_native_render_scene_shadows", "false"},
+      {"skate3_native_render_scene_shadow_static_casters", "false"},
+      {"skate3_native_render_scene_shadow_pcss", "false"},
+      {"skate3_native_render_scene_ssao", "false"},
+      {"skate3_native_render_scene_hdr", "false"},
+      {"skate3_native_render_scene_bloom", "false"},
+      {"skate3_native_render_scene_shafts", "false"},
+      {"skate3_native_render_scene_haze", "false"},
+      {"skate3_native_render_scene_smooth_camera", "false"},
+      {"skate3_native_render_scene_selection_outline", "false"},
+      {"skate3_native_render_scene_lightmaps", "false"},
+      {"skate3_native_render_scene_macro", "false"},
+      {"skate3_native_render_scene_decals", "false"},
+      {"skate3_native_render_scene_sort_opaque", "false"},
+      {"skate3_native_render_scene_splines", "false"},
+      {"skate3_native_render_scene_ropa_blend", "false"},
+      {"skate3_native_render_scene_entity_fade", "false"},
+      {"skate3_native_render_scene_lw_fade", "false"},
+      {"skate3_native_render_scene_lw_gap_fill", "false"},
+      {"skate3_native_render_scene_lw_identity", "false"},
+      {"skate3_native_render_scene_lw_palette", "false"},
+      {"skate3_native_render_scene_prewarm_budget_ms", "4"},
+      {"skate3_native_render_scene_warmup_budget_ms", "4"},
+      {"skate3_native_render_scene_occlusion_cull", "true"},
+      {"skate3_native_render_scene_occlusion_cull_build", "true"},
+      {"skate3_native_render_scene_occlusion_cull_guest", "true"},
+      {"skate3_native_render_scene_perf_log", "false"},
+      {"skate3_native_render_scene_perf_interval", "300"},
+      {"skate3_guest_fps_cap", "30"},
+      {"skate3_guest_fps_cap_auto", "false"},
+      {"texture_cache_memory_limit_soft", "192"},
+      {"texture_cache_memory_limit_hard", "288"},
+      {"texture_cache_memory_limit_render_to_texture", "16"},
+      {"show_fps_counter", "true"},
+  };
   const auto apply_profile = [](const auto& profile) {
     for (const auto& [name, value] : profile) {
       rex::cvar::SetFlagByName(std::string(name), std::string(value));
@@ -653,8 +704,13 @@ void Skate3BaseApp::OnConfigurePaths(rex::PathConfig& paths) {
   if (android_profile == 0) {
     apply_profile(kPerformancePreset);
     REXLOG_INFO(
-        "Android device profile: RG406V / Performance (512x288, 0.5x "
+        "Android device profile: Performance (512x288, 0.5x "
         "world/LOD, simplified materials)");
+  } else if (android_profile == 2) {
+    apply_profile(kUltraLowPreset);
+    REXLOG_INFO(
+        "Android device profile: Ultra Low / Honor X5 Plus class (384x216, "
+        "0.35x world/LOD, simplified materials, 30 FPS cap)");
   } else {
     rex::cvar::SetFlagByName("skate3_native_render_scene_handheld_potato", "false");
     REXLOG_INFO("Android device profile: High-End / Quality (1280x720, regular materials, saved settings)");

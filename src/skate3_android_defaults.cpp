@@ -1,6 +1,8 @@
 #include "skate3_android_defaults.h"
 #if defined(__ANDROID__)
 #include <sys/sysinfo.h>
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <fstream>
 #include <map>
@@ -25,7 +27,70 @@ uint64_t AndroidTotalRamMb() {
 // True where the machine is small enough that memory, not sharpness, is what
 // limits it. Everything gated on this leaves larger devices exactly as they
 // were.
-bool AndroidIsLowEnd() { return AndroidTotalRamMb() != 0 && AndroidTotalRamMb() < 4000; }
+//
+// The bar is 4600 MB, not marketed capacity: a 4 GB device never reports
+// 4096 MiB through sysinfo (the kernel keeps part of it), and borderline
+// devices reporting 4001-4607 MB used to fall through to the Quality profile.
+// True 5-6 GB phones stay far above this line.
+constexpr uint64_t kLowEndMaxRamMb = 4600;
+// Devices below this are memory-starved regardless of the SoC.
+constexpr uint64_t kUltraLowRamMb = 3300;
+
+bool AndroidIsLowEnd() { return AndroidTotalRamMb() != 0 && AndroidTotalRamMb() < kLowEndMaxRamMb; }
+
+// True for the entry-level silicon class that needs the 216p ultra-low
+// profile rather than the 288p Performance one: Honor X5 Plus (Helio G36 /
+// PowerVR GE8320), Helio G25/G35/P22/A22 and friends, or any Android device
+// below 3.3 GB of reported RAM. Reads /proc/cpuinfo because sysinfo alone
+// cannot tell a 4 GB G36 from a 4 GB midranger.
+bool AndroidIsUltraLowEnd() {
+  const uint64_t total_mb = AndroidTotalRamMb();
+  if (total_mb == 0 || total_mb >= kLowEndMaxRamMb) {
+    return false;
+  }
+  if (total_mb < kUltraLowRamMb) {
+    return true;
+  }
+  std::ifstream cpuinfo("/proc/cpuinfo");
+  if (!cpuinfo) {
+    return false;
+  }
+  std::string haystack;
+  std::string line;
+  const auto lower = [](std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+      return static_cast<char>(std::tolower(c));
+    });
+    return value;
+  };
+  while (std::getline(cpuinfo, line)) {
+    const auto colon = line.find(':');
+    if (colon == std::string::npos) {
+      continue;
+    }
+    const std::string key = lower(line.substr(0, colon));
+    if (key.find("hardware") == std::string::npos &&
+        key.find("model name") == std::string::npos &&
+        key.find("processor") == std::string::npos &&
+        key.find("soc") == std::string::npos) {
+      continue;
+    }
+    haystack += lower(line.substr(colon + 1));
+    haystack += ' ';
+  }
+  static constexpr const char* kEntryMarkers[] = {
+      // Entry MediaTek octas (all Cortex-A53 class, PowerVR GE8x20 GPUs).
+      "mt6739", "mt6750", "mt6761", "mt6762", "mt6765",
+      "helio g25", "helio g35", "helio g36", "helio p22", "helio a22",
+      "powervr ge8",
+  };
+  for (const char* marker : kEntryMarkers) {
+    if (haystack.find(marker) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // Which cores are the fast ones.
 //
@@ -111,8 +176,8 @@ AndroidStoreBudgets PickAndroidStoreBudgets() {
   AndroidStoreBudgets b;
   if (total_mb == 0) {
     b = {288, 224, "unknown"};
-  } else if (total_mb >= 5000) {
-    b = {288, 224, "standard (6 GB+)"};
+  } else if (total_mb >= kLowEndMaxRamMb) {
+    b = {288, 224, "standard (4.6 GB+)"};
   } else {
     // The stores used to be clamped at 256 MB apiece, which on a 3 GB device
     // pinned half a gigabyte while the system paged gigabytes through zram.
@@ -177,7 +242,16 @@ void ApplySkate3AndroidDefaults() {
       REXLOG_ERROR("Android default could not be applied: {}={}", name, value);
     }
   }
-  if (AndroidIsLowEnd()) {
+  if (AndroidIsUltraLowEnd()) {
+    // Honor X5 Plus / Helio G36 class: shave two mip levels off the big
+    // textures (16x less decode and memory for them), refresh statics
+    // rarely. The 216p scene target and the 30 FPS cap come from the
+    // quality profile selected below.
+    rex::cvar::SetFlagByName("skate3_native_render_scene_tex_base_mip_px", "128");
+    rex::cvar::SetFlagByName("skate3_native_render_scene_tex_base_mip2_px", "512");
+    rex::cvar::SetFlagByName("skate3_native_render_guest_static_refresh", "16");
+    rex::cvar::SetFlagByName("skate3_native_render_lw_refresh", "3");
+  } else if (AndroidIsLowEnd()) {
     rex::cvar::SetFlagByName("skate3_native_render_scene_tex_base_mip_px", "256");
     rex::cvar::SetFlagByName("skate3_native_render_scene_tex_base_mip2_px", "1024");
     rex::cvar::SetFlagByName("skate3_native_render_guest_static_refresh", "2");
@@ -187,6 +261,12 @@ void ApplySkate3AndroidDefaults() {
   rex::cvar::SetFlagByName("skate3_native_render_scene_tex_store_mb", std::to_string(budgets.tex_mb));
   rex::cvar::SetFlagByName("skate3_native_render_scene_mesh_store_mb", std::to_string(budgets.mesh_mb));
   rex::cvar::SetFlagByName("android_thread_placement_map", AndroidThreadPlacement());
-  rex::cvar::SetFlagByName("skate3_android_quality_profile", AndroidIsLowEnd() ? "0" : "1");
+  const char* android_profile = "1";
+  if (AndroidIsUltraLowEnd()) {
+    android_profile = "2";
+  } else if (AndroidIsLowEnd()) {
+    android_profile = "0";
+  }
+  rex::cvar::SetFlagByName("skate3_android_quality_profile", android_profile);
 #endif
 }

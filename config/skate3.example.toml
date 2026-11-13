@@ -78,6 +78,21 @@ occlusion_query_enable = true
 advanced_settings_overlay_enabled = true
 
 selected_user_profile = "player"
+
+# ---- Android on-device performance profiles --------------------------
+# Auto-selected at boot from RAM and CPU identity; saved values here win.
+# 0 = Performance (288p scene target, 0.5x draw/LOD, RG406V class)
+# 1 = High-End / Quality (720p, full material pipeline)
+# 2 = Ultra Low (216p scene target, 0.35x draw/LOD, locked 30 FPS cap,
+#     Honor X5 Plus / Helio G36 class)
+#skate3_android_quality_profile = 2
+# Tuning knobs honored by all profiles:
+#skate3_draw_distance_scale = 0.35
+#skate3_lod_distance_scale = 0.35
+#skate3_guest_fps_cap = 30
+# Drop the two largest mip levels of big guest textures (bytes and decode):
+#skate3_native_render_scene_tex_base_mip_px = 128
+#skate3_native_render_scene_tex_base_mip2_px = 512
 user_profile_name = "Player"
 user_profile_xuid = "B13E07DFF9AB6772"
 user_profile_signed_in = true
