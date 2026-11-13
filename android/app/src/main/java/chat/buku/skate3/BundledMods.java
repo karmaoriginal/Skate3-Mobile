@@ -16,15 +16,15 @@ import java.security.NoSuchAlgorithmException;
 
 /** Installs character files that are intentionally shipped inside the APK. */
 final class BundledMods {
-    private static final String SEIYU_VERSION = "1.0.0-bundled.1";
+    private static final String SEIYU_VERSION = "1.0.0-bundled.2";
     private static final String SEIYU_MODEL_ASSET = "mods/seiyu/base.obj";
     private static final String SEIYU_TEXTURE_ASSET = "mods/seiyu/texture_diffuse.png";
     private static final long SEIYU_MODEL_SIZE = 920451L;
-    private static final long SEIYU_TEXTURE_SIZE = 2156122L;
+    private static final long SEIYU_TEXTURE_SIZE = 588108L;
     private static final String SEIYU_MODEL_SHA256 =
         "a2c2ea56e2136d68cd1b65b07a77d263976100f5638e104c2082a3bb150435fb";
     private static final String SEIYU_TEXTURE_SHA256 =
-        "aaae6cb98b9819ef2a032808945bfabdbb908947c3ee2f01354861138567ef52";
+        "2bc1ccba0b97e886a4101a7f44aadc3d31b8f03c314e246509aea63428b06643";
     private static final String VERSION_MARKER = ".bundled-seiyu-version";
 
     private BundledMods() {}
