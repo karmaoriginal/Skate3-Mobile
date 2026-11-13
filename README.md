@@ -32,7 +32,7 @@ You do not need a computer, developer tools, or an ISO extraction app.
 
 1. [Download the latest signed Android APK](https://github.com/Buku313/Skate3-Mobile/releases/latest/download/Skate3-Mobile-Android.apk).
 2. Install it and open **Skate 3 Mobile**.
-3. Tap **Select My Skate 3 ISO** and choose an ISO dumped from your own copy.
+3. Tap **Select ISO or Archive** and choose an ISO dumped from your own copy, or a `.zip` / `.rar` / `.7z` / `.tar` / `.tar.gz` archive of the extracted game.
 4. Keep the app open while it extracts and verifies the game.
 5. Tap **Play Skate 3**.
 
@@ -126,6 +126,7 @@ the person building the project. This is experimental research software, and a
 - High-end Android quality profile included
 - Seiyu Paradise Penguin included, with the original skater selected by default
 - Experimental direct-IP free-skate ghost included and disabled by default
+- Game, mod and GPU driver imports accept .zip, .rar, .7z, .tar and .tar.gz archives
 
 This is still early. Expect visual bugs, missing effects, device-specific
 problems, and performance differences between phones.
@@ -277,7 +278,9 @@ mods/penguin/texture_diffuse.png
 ```
 
 Choose Seiyu from **RB + Start > Mods > Playable Character**. The mod rigs Seiyu
-to the live skater skeleton and keeps the skateboard visible.
+to the live skater skeleton and keeps the skateboard visible. Manual installs can
+also import a single `.zip` / `.rar` / `.7z` / `.tar` / `.tar.gz` archive with
+`base.obj` and `texture_diffuse.png` from **Characters > Restore Seiyu > Import archive**.
 
 Creators can [submit an original custom character](https://buku313.github.io/Skate3-Mobile/mods/submit.html)
 for testing and possible inclusion in the verified Mod Store. Submissions must

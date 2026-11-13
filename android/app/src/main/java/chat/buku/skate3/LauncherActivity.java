@@ -39,10 +39,13 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.stream.Stream;
 
 public class LauncherActivity extends Activity {
     private static final int REQUEST_ISO = 1001;
@@ -50,9 +53,11 @@ public class LauncherActivity extends Activity {
     private static final int REQUEST_SEIYU_MODEL = 1003;
     private static final int REQUEST_SEIYU_TEXTURE = 1004;
     private static final int REQUEST_GPU_DRIVER = 1005;
+    private static final int REQUEST_SEIYU_ARCHIVE = 1006;
     private static final long INSTALL_HEADROOM = 512L * 1024 * 1024;
     private static final long MAX_SEIYU_MODEL_SIZE = 32L * 1024 * 1024;
     private static final long MAX_SEIYU_TEXTURE_SIZE = 64L * 1024 * 1024;
+    private static final long MAX_DRIVER_PACKAGE_SIZE = 512L * 1024 * 1024;
     private static final String BUKU_GITHUB =
         "https://github.com/Buku313/Skate3-Mobile";
     private static final String COMPLETE_MARKER = ".iso-extraction-complete";
@@ -287,9 +292,9 @@ public class LauncherActivity extends Activity {
 
         setLocalizedText(statusText, "ONE FILE NEEDED");
         setLocalizedText(detailText,
-            "Select your Skate 3 Xbox 360 ISO. It can be in Downloads, on an SD card, or on a connected USB drive.\n\nFree space: " +
+            "Select your Skate 3 Xbox 360 ISO, or a .zip / .rar / .7z / .tar / .tar.gz archive of the extracted game. It can be in Downloads, on an SD card, or on a connected USB drive.\n\nFree space: " +
             humanBytes(new StatFs(storageRoot.getAbsolutePath()).getAvailableBytes()));
-        setButton(primaryButton, "SELECT MY SKATE 3 ISO", view -> pickIso(), true);
+        setButton(primaryButton, "SELECT ISO OR ARCHIVE", view -> pickIso(), true);
         hide(characterButton);
         hide(gpuDriverButton);
         hide(secondaryButton);
@@ -343,7 +348,7 @@ public class LauncherActivity extends Activity {
                     uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
             } catch (SecurityException ignored) {
             }
-            beginIsoInstallation(uri);
+            beginGameInstallation(uri);
         } else if (requestCode == REQUEST_TITLE_UPDATE) {
             installSelectedTitleUpdate(uri);
         } else if (requestCode == REQUEST_SEIYU_MODEL) {
@@ -352,6 +357,147 @@ public class LauncherActivity extends Activity {
             importSeiyuTexture(uri);
         } else if (requestCode == REQUEST_GPU_DRIVER) {
             importGpuDriver(uri);
+        } else if (requestCode == REQUEST_SEIYU_ARCHIVE) {
+            importSeiyuArchive(uri);
+        }
+    }
+
+    private void beginGameInstallation(Uri uri) {
+        ArchiveExtractor.Format format = sniffArchiveFormat(uri);
+        if (format == ArchiveExtractor.Format.UNKNOWN) {
+            // Not a recognized archive; let the ISO inspector report the problem.
+            beginIsoInstallation(uri);
+            return;
+        }
+        beginGameArchiveInstallation(uri);
+    }
+
+    private ArchiveExtractor.Format sniffArchiveFormat(Uri uri) {
+        try (ParcelFileDescriptor descriptor = getContentResolver().openFileDescriptor(uri, "r");
+             FileInputStream input = descriptor == null ? null
+                 : new FileInputStream(descriptor.getFileDescriptor())) {
+            if (input == null) {
+                return ArchiveExtractor.Format.UNKNOWN;
+            }
+            return ArchiveExtractor.detect(input.getChannel());
+        } catch (Exception exception) {
+            return ArchiveExtractor.Format.UNKNOWN;
+        }
+    }
+
+    private FileChannel openArchiveChannel(Uri uri) throws IOException {
+        ParcelFileDescriptor descriptor = getContentResolver().openFileDescriptor(uri, "r");
+        if (descriptor == null) {
+            throw new IOException("Android could not open the selected file.");
+        }
+        // getFileDescriptor() shares the fd with the channel: closing the
+        // channel closes the fd and the descriptor's later close is a no-op.
+        return new FileInputStream(descriptor.getFileDescriptor()).getChannel();
+    }
+
+    private void beginGameArchiveInstallation(Uri uri) {
+        setBusy("INSPECTING ARCHIVE", "Checking " + displayName(uri), false);
+        worker.execute(() -> {
+            boolean extractionComplete = false;
+            try {
+                deleteRecursively(partialDirectory);
+                Files.createDirectories(partialDirectory.toPath());
+
+                long declaredTotal = -1;
+                try {
+                    declaredTotal = ArchiveExtractor.declaredTotalSize(openArchiveChannel(uri));
+                } catch (Exception ignored) {
+                    declaredTotal = -1;
+                }
+                long available = new StatFs(storageRoot.getAbsolutePath()).getAvailableBytes();
+                if (declaredTotal > 0 && available < declaredTotal + INSTALL_HEADROOM) {
+                    throw new IOException("Not enough free space. This install needs " +
+                        humanBytes(declaredTotal + INSTALL_HEADROOM) + ", but only " +
+                        humanBytes(available) + " is available.");
+                }
+
+                runOnUiThread(() -> {
+                    setLocalizedText(statusText, "EXTRACTING GAME");
+                    progressBar.setVisibility(View.VISIBLE);
+                });
+                String name = displayName(uri);
+                final long progressTotal = Math.max(declaredTotal, 0);
+                ArchiveExtractor.extract(openArchiveChannel(uri), name,
+                    partialDirectory.toPath(), ArchiveExtractor.Limits.forGame(),
+                    (copied, currentFile) -> showExtractionProgress(copied, progressTotal,
+                                                                     currentFile));
+
+                Path extractRoot = partialDirectory.toPath().toAbsolutePath().normalize();
+                Path gameRoot = locateGameRoot(extractRoot);
+                if (!gameRoot.equals(extractRoot)) {
+                    hoistGameRoot(extractRoot, gameRoot);
+                }
+                verifyRetailGame(extractRoot, "The archive");
+                Files.write(extractRoot.resolve(COMPLETE_MARKER),
+                            "Skate 3 retail files verified\n".getBytes(StandardCharsets.UTF_8));
+                extractionComplete = true;
+                appendLog("Archive extraction and retail-file verification completed.");
+                installTitleUpdateOnlineAndFinalize();
+            } catch (Exception exception) {
+                if (!extractionComplete) {
+                    try {
+                        deleteRecursively(partialDirectory);
+                    } catch (IOException cleanupError) {
+                        exception.addSuppressed(cleanupError);
+                    }
+                }
+                showFailure("Setup stopped: " + cleanMessage(exception), exception);
+            }
+        });
+    }
+
+    /**
+     * Locate the directory that holds default.xex and data/webkit/EAWebkit.xex. Archives of
+     * an extracted game dump sometimes wrap the tree in a single top-level folder.
+     */
+    private Path locateGameRoot(Path extractRoot) throws IOException {
+        if (Files.isRegularFile(extractRoot.resolve("default.xex")) &&
+                Files.isRegularFile(extractRoot.resolve("data/webkit/EAWebkit.xex"))) {
+            return extractRoot;
+        }
+        Path best = null;
+        try (Stream<Path> stream = Files.walk(extractRoot, 6)) {
+            for (Iterator<Path> iterator = stream.filter(Files::isDirectory).iterator();
+                 iterator.hasNext();) {
+                Path directory = iterator.next();
+                if (Files.isRegularFile(directory.resolve("default.xex")) &&
+                        Files.isRegularFile(directory.resolve("data/webkit/EAWebkit.xex"))) {
+                    if (best == null || directory.getNameCount() < best.getNameCount()) {
+                        best = directory;
+                    }
+                }
+            }
+        }
+        if (best == null) {
+            throw new IOException("The archive does not contain default.xex and " +
+                "data/webkit/EAWebkit.xex. Select the ISO, or an archive of the extracted game.");
+        }
+        return best;
+    }
+
+    /** Move the contents of a nested game root up into the extraction root. */
+    private void hoistGameRoot(Path extractRoot, Path gameRoot) throws IOException {
+        try (Stream<Path> children = Files.list(gameRoot)) {
+            for (Iterator<Path> iterator = children.iterator(); iterator.hasNext();) {
+                Path child = iterator.next();
+                Files.move(child, extractRoot.resolve(child.getFileName().toString()),
+                           StandardCopyOption.REPLACE_EXISTING);
+            }
+        }
+        Path cursor = gameRoot;
+        while (!cursor.equals(extractRoot)) {
+            try {
+                Files.delete(cursor);
+            } catch (IOException ignored) {
+                break; // not empty; leave it in place
+            }
+            cursor = cursor.getParent();
+            if (cursor == null) break;
         }
     }
 
@@ -384,7 +530,7 @@ public class LauncherActivity extends Activity {
                     XboxIsoExtractor.extract(channel, inspection, partialDirectory.toPath(),
                                              this::showExtractionProgress);
                 }
-                verifyRetailGame(partialDirectory.toPath());
+                verifyRetailGame(partialDirectory.toPath(), "The ISO");
                 Files.write(partialDirectory.toPath().resolve(COMPLETE_MARKER),
                             "Skate 3 retail files verified\n".getBytes(StandardCharsets.UTF_8));
                 extractionComplete = true;
@@ -407,7 +553,7 @@ public class LauncherActivity extends Activity {
         setBusy("INSTALLING TITLE UPDATE 3", "Downloading and verifying 1.7 MB...", true);
         worker.execute(() -> {
             try {
-                verifyRetailGame(partialDirectory.toPath());
+                verifyRetailGame(partialDirectory.toPath(), "The extracted game");
                 installTitleUpdateOnlineAndFinalize();
             } catch (Exception exception) {
                 showFailure("Title Update setup stopped: " + cleanMessage(exception), exception);
@@ -434,7 +580,7 @@ public class LauncherActivity extends Activity {
                 if (input == null) {
                     throw new IOException("Android could not open the selected Title Update file.");
                 }
-                verifyRetailGame(partialDirectory.toPath());
+                verifyRetailGame(partialDirectory.toPath(), "The extracted game");
                 TitleUpdateInstaller.installPackage(input, partialDirectory.toPath());
                 finalizeInstallation();
             } catch (Exception exception) {
@@ -481,15 +627,16 @@ public class LauncherActivity extends Activity {
 
     private void showExtractionProgress(long copied, long total, String currentFile) {
         long now = System.nanoTime();
-        if (copied < total && now - lastProgressUpdate < 150_000_000L) {
+        if (now - lastProgressUpdate < 150_000_000L && (total <= 0 || copied < total)) {
             return;
         }
         lastProgressUpdate = now;
         int progress = total > 0 ? (int) Math.min(1000, copied * 1000 / total) : 0;
         runOnUiThread(() -> {
             progressBar.setProgress(progress);
-            setLocalizedText(detailText, humanBytes(copied) + " of " + humanBytes(total) +
-                                             "\n" + currentFile);
+            setLocalizedText(detailText, total > 0
+                ? humanBytes(copied) + " of " + humanBytes(total) + "\n" + currentFile
+                : humanBytes(copied) + " extracted\n" + currentFile);
         });
     }
 
@@ -746,7 +893,8 @@ public class LauncherActivity extends Activity {
         panel.setPadding(dp(22), dp(8), dp(22), dp(6));
 
         String details = "Selected: " + selected +
-            "\n\nSystem Driver is recommended. Custom drivers are optional and only intended for troubleshooting Snapdragon / Adreno devices.";
+            "\n\nSystem Driver is recommended. Custom drivers are optional and only intended for troubleshooting Snapdragon / Adreno devices." +
+            "\n\nAccepted packages: .zip, .rar, .7z, .tar, .tar.gz and .adpkg.";
         if (driver != null) {
             details += "\n\nImported: " + driver.label() +
                 "\nVendor: " + driver.vendor + "\nAuthor: " + driver.author;
@@ -784,7 +932,7 @@ public class LauncherActivity extends Activity {
 
         Button importDriver = actionButton(false);
         setButton(importDriver,
-                  driver == null ? "IMPORT ZIP / ADPKG" : "IMPORT ANOTHER ZIP / ADPKG",
+                  driver == null ? "IMPORT DRIVER ARCHIVE" : "IMPORT ANOTHER ARCHIVE",
                   view -> {
                       dialog.dismiss();
                       pickGpuDriver();
@@ -826,12 +974,14 @@ public class LauncherActivity extends Activity {
     private void pickGpuDriver() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
-        // Turnip packages use both .zip and .adpkg. Several Android file
-        // pickers report ADPKG as application/octet-stream (or no useful MIME
-        // type at all), so a zip-only filter hides perfectly valid packages.
+        // ADPKG packages ship as .zip/.adpkg; .rar/.7z/.tar are supported too.
+        // Several pickers report these as application/octet-stream (or no useful
+        // MIME type at all), so the catch-all stays.
         intent.setType("*/*");
         intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {
             "application/zip", "application/x-zip-compressed",
+            "application/vnd.rar", "application/x-rar-compressed",
+            "application/x-7z-compressed", "application/x-tar", "application/gzip",
             "application/octet-stream"
         });
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -849,9 +999,23 @@ public class LauncherActivity extends Activity {
     private void importGpuDriver(Uri uri) {
         setBusy("IMPORTING GPU DRIVER", "Checking " + displayName(uri) + "...", true);
         worker.execute(() -> {
-            try (InputStream input = getContentResolver().openInputStream(uri)) {
-                if (input == null) throw new IOException("Android could not open the selected ZIP.");
-                CustomGpuDriver.Driver driver = CustomGpuDriver.importPackage(this, input);
+            String name = displayName(uri);
+            Path spooled = null;
+            try {
+                FileChannel channel;
+                try {
+                    channel = openArchiveChannel(uri);
+                } catch (IOException openFailure) {
+                    // Some document providers (Drive, Dropbox...) cannot hand out a
+                    // file descriptor; spool the package into the cache instead.
+                    spooled = Files.createTempFile(getCacheDir().toPath(), "driver-", ".package");
+                    copyUriLimited(uri, spooled, MAX_DRIVER_PACKAGE_SIZE, false,
+                                   "The selected driver package");
+                    channel = FileChannel.open(spooled);
+                }
+                // importPackage closes the channel (via ArchiveExtractor).
+                CustomGpuDriver.Driver driver =
+                    CustomGpuDriver.importPackage(this, channel, name);
                 appendLog("Imported custom GPU driver " + driver.label() + ".");
                 runOnUiThread(() -> {
                     busy = false;
@@ -865,6 +1029,13 @@ public class LauncherActivity extends Activity {
             } catch (Exception exception) {
                 showFailure("Could not import the GPU driver: " + cleanMessage(exception),
                             exception);
+            } finally {
+                if (spooled != null) {
+                    try {
+                        Files.deleteIfExists(spooled);
+                    } catch (IOException ignored) {
+                    }
+                }
             }
         });
     }
@@ -1119,6 +1290,8 @@ public class LauncherActivity extends Activity {
             .setTitle("Restore Seiyu Paradise Penguin")
             .setMessage("Seiyu is bundled with the app and the original skater remains the default. Manual import is available only for development or restoring custom files. In game, press RB + Start and open Mods to switch characters.")
             .setNegativeButton("Cancel", null)
+            .setNeutralButton(localize("IMPORT ARCHIVE (.ZIP, .RAR, .7Z, .TAR)"),
+                              (dialog, which) -> pickSeiyuArchive())
             .setPositiveButton("Choose files", (dialog, which) -> pickSeiyuModel())
             .show();
     }
@@ -1192,8 +1365,170 @@ public class LauncherActivity extends Activity {
         });
     }
 
+    private void pickSeiyuArchive() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {
+            "application/zip", "application/x-zip-compressed",
+            "application/vnd.rar", "application/x-rar-compressed",
+            "application/x-7z-compressed", "application/x-tar", "application/gzip",
+            "application/octet-stream"
+        });
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        intent.putExtra(Intent.EXTRA_TITLE,
+                        "Choose a Seiyu mod archive (.zip, .rar, .7z, .tar, .tar.gz)");
+        try {
+            startActivityForResult(intent, REQUEST_SEIYU_ARCHIVE);
+        } catch (ActivityNotFoundException exception) {
+            showFailure("Android could not open its file picker.", exception);
+        }
+    }
+
+    private void importSeiyuArchive(Uri uri) {
+        setBusy("IMPORTING SEIYU", "Checking " + displayName(uri), false);
+        worker.execute(() -> {
+            Path tempDirectory = null;
+            Path mod = activeGameDirectory().toPath().resolve("mods/penguin");
+            try {
+                tempDirectory = Files.createTempDirectory(getCacheDir().toPath(), "seiyu-archive-");
+                String name = displayName(uri);
+                FileChannel channel;
+                Path spooled = null;
+                try {
+                    channel = openArchiveChannel(uri);
+                } catch (IOException openFailure) {
+                    // Streaming-only providers (Drive, Dropbox...) cannot hand out a
+                    // file descriptor; spool the small mod archive into the cache.
+                    spooled = Files.createTempFile(getCacheDir().toPath(), "seiyu-", ".package");
+                    try {
+                        copyUriLimited(uri, spooled, 128L * 1024 * 1024, false,
+                                       "The selected mod archive");
+                    } catch (IOException spoolFailure) {
+                        Files.deleteIfExists(spooled);
+                        throw new IOException("Android could not open the selected archive. " +
+                            "Copy it into Downloads and try again.", spoolFailure);
+                    }
+                    channel = FileChannel.open(spooled);
+                }
+                try {
+                    // ArchiveExtractor closes the channel when it is done with it.
+                    ArchiveExtractor.extract(channel, name, tempDirectory,
+                                             ArchiveExtractor.Limits.forMod(), null);
+                } finally {
+                    if (spooled != null) {
+                        try {
+                            Files.deleteIfExists(spooled);
+                        } catch (IOException ignored) {
+                        }
+                    }
+                }
+                Path baseObj = findSingleFile(tempDirectory, "base.obj", ".obj");
+                Path texture = findSingleFile(tempDirectory, "texture_diffuse.png", ".png");
+                if (Files.size(baseObj) > MAX_SEIYU_MODEL_SIZE) {
+                    throw new IOException("The base.obj inside the archive is unexpectedly large.");
+                }
+                verifyPng(texture);
+
+                Files.createDirectories(mod);
+                Path pendingModel = mod.resolve("base.obj.installing");
+                Path pendingTexture = mod.resolve("texture_diffuse.png.installing");
+                try {
+                    Files.copy(baseObj, pendingModel, StandardCopyOption.REPLACE_EXISTING);
+                    Files.copy(texture, pendingTexture, StandardCopyOption.REPLACE_EXISTING);
+                    Files.move(pendingModel, mod.resolve("base.obj"),
+                               StandardCopyOption.REPLACE_EXISTING);
+                    Files.move(pendingTexture, mod.resolve("texture_diffuse.png"),
+                               StandardCopyOption.REPLACE_EXISTING);
+                } catch (Exception failure) {
+                    Files.deleteIfExists(pendingModel);
+                    Files.deleteIfExists(pendingTexture);
+                    throw failure;
+                }
+                appendLog("Seiyu Paradise Penguin installed from a mod archive.");
+                runOnUiThread(() -> {
+                    busy = false;
+                    getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                    progressBar.setVisibility(View.GONE);
+                    Toast.makeText(this, "Seiyu installed. Choose it in RB + Start > Mods.",
+                                   Toast.LENGTH_LONG).show();
+                    refreshInterface();
+                });
+            } catch (Exception exception) {
+                showFailure("Could not import the Seiyu archive: " + cleanMessage(exception),
+                            exception);
+            } finally {
+                if (tempDirectory != null) {
+                    try {
+                        deleteRecursively(tempDirectory.toFile());
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+        });
+    }
+
+    /**
+     * Find the file the user meant inside a Seiyu mod archive: exact name first
+     * (base.obj / texture_diffuse.png, any folder depth), single matching extension as a
+     * fallback. Zero or multiple matches abort the import with a clear message.
+     */
+    private Path findSingleFile(Path root, String exactName, String extension)
+            throws IOException {
+        List<Path> exact = new ArrayList<>();
+        List<Path> fallback = new ArrayList<>();
+        try (Stream<Path> paths = Files.walk(root, 6)) {
+            for (Path path : (Iterable<Path>) paths.iterator()) {
+                if (!Files.isRegularFile(path)) continue;
+                String name = path.getFileName().toString();
+                if (name.equalsIgnoreCase(exactName)) {
+                    exact.add(path);
+                } else if (name.toLowerCase(Locale.US).endsWith(extension)) {
+                    fallback.add(path);
+                }
+            }
+        }
+        List<Path> matches = !exact.isEmpty() ? exact : fallback;
+        if (matches.isEmpty()) {
+            throw new IOException("The archive does not contain " + exactName + ".");
+        }
+        if (matches.size() > 1) {
+            throw new IOException("The archive contains more than one " +
+                (exact.isEmpty() ? extension.substring(1).toUpperCase(Locale.US) + " file"
+                                : exactName) +
+                ". Keep only " + exactName + " in the archive.");
+        }
+        return matches.get(0);
+    }
+
+    private void verifyPng(Path texture) throws IOException {
+        if (Files.size(texture) > MAX_SEIYU_TEXTURE_SIZE) {
+            throw new IOException("The texture_diffuse.png inside the archive is unexpectedly large.");
+        }
+        byte[] magic = new byte[8];
+        try (InputStream input = Files.newInputStream(texture)) {
+            int offset = 0;
+            while (offset < magic.length) {
+                int read = input.read(magic, offset, magic.length - offset);
+                if (read < 0) break;
+                offset += read;
+            }
+        }
+        boolean isPng = magic[0] == (byte) 0x89 && magic[1] == 'P' && magic[2] == 'N' &&
+                        magic[3] == 'G' && magic[4] == 0x0d && magic[5] == 0x0a &&
+                        magic[6] == 0x1a && magic[7] == 0x0a;
+        if (!isPng) {
+            throw new IOException("The texture_diffuse.png inside the archive is not a valid PNG image.");
+        }
+    }
+
     private void copyUriLimited(Uri uri, Path destination, long maximumBytes,
                                 boolean requirePng) throws IOException {
+        copyUriLimited(uri, destination, maximumBytes, requirePng, "The selected Seiyu file");
+    }
+
+    private void copyUriLimited(Uri uri, Path destination, long maximumBytes,
+                                boolean requirePng, String fileDescription) throws IOException {
         try (InputStream input = getContentResolver().openInputStream(uri)) {
             if (input == null) {
                 throw new IOException("Android could not open the selected file.");
@@ -1207,7 +1542,7 @@ public class LauncherActivity extends Activity {
                     if (read < 0) break;
                     copied += read;
                     if (copied > maximumBytes) {
-                        throw new IOException("The selected Seiyu file is unexpectedly large.");
+                        throw new IOException(fileDescription + " is unexpectedly large.");
                     }
                     output.write(buffer, 0, read);
                 }
@@ -1217,7 +1552,7 @@ public class LauncherActivity extends Activity {
             }
             if (copied == 0) {
                 Files.deleteIfExists(destination);
-                throw new IOException("The selected Seiyu file is empty.");
+                throw new IOException(fileDescription + " is empty.");
             }
         }
         if (requirePng) {
@@ -1249,15 +1584,16 @@ public class LauncherActivity extends Activity {
         return new File(partialDirectory, COMPLETE_MARKER).isFile();
     }
 
-    private void verifyRetailGame(Path root) throws IOException {
-        verifyFile(root.resolve("default.xex"), EXPECTED_DEFAULT_XEX, "default.xex");
+    private void verifyRetailGame(Path root, String sourceLabel) throws IOException {
+        verifyFile(root.resolve("default.xex"), EXPECTED_DEFAULT_XEX, "default.xex", sourceLabel);
         verifyFile(root.resolve("data/webkit/EAWebkit.xex"), EXPECTED_WEBKIT_XEX,
-                   "data/webkit/EAWebkit.xex");
+                   "data/webkit/EAWebkit.xex", sourceLabel);
     }
 
-    private void verifyFile(Path path, String expectedHash, String label) throws IOException {
+    private void verifyFile(Path path, String expectedHash, String label, String sourceLabel)
+            throws IOException {
         if (!Files.isRegularFile(path)) {
-            throw new IOException("The ISO did not provide " + label + ".");
+            throw new IOException(sourceLabel + " did not provide " + label + ".");
         }
         try (InputStream input = Files.newInputStream(path)) {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -1361,7 +1697,7 @@ public class LauncherActivity extends Activity {
             progressBar.setVisibility(View.GONE);
             new AlertDialog.Builder(this)
                 .setTitle(localize("Setup needs attention"))
-                .setMessage(localize(message) + "\n\n" + localize("Your original ISO was not changed."))
+                .setMessage(localize(message) + "\n\n" + localize("Your original file was not changed."))
                 .setPositiveButton("OK", (dialog, which) -> refreshInterface())
                 .show();
         });

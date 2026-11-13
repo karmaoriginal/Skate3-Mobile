@@ -28,11 +28,12 @@ multiplayer.
 The normal setup does not need a computer:
 
 1. Install the APK and open **Skate 3 Mobile**.
-2. Choose **Select My Skate 3 ISO**.
+2. Choose **Select ISO or Archive**.
 3. Use Android's file picker to select an ISO dumped from your own supported
-   Xbox 360 copy. The ISO may be in Downloads, on an SD card, or on a connected
-   USB drive.
-4. Leave the app open while it inspects and extracts the ISO.
+   Xbox 360 copy, or a `.zip`, `.rar`, `.7z`, `.tar` or `.tar.gz` archive of the
+   extracted game tree. The file may be in Downloads, on an SD card, or on a
+   connected USB drive.
+4. Leave the app open while it inspects and extracts the game.
 5. The app downloads the exact Title Update 3 package, verifies both patch
    files, and finishes the installation.
 6. Choose **Play Skate 3**.
@@ -197,10 +198,36 @@ the touch setup panel. The game receives no input while the panel is open.
 
 See [LOW_END_DEVICES.md](../docs/LOW_END_DEVICES.md) for the full details.
 
+## Importing from archives (.zip, .rar, .7z, .tar, .tar.gz)
+
+Alongside the raw ISO flow, the launcher can install the game, Seiyu mods and
+GPU driver packages straight from compressed archives. Format detection uses
+magic bytes, never the file extension.
+
+| Flow | Where | Notes |
+| --- | --- | --- |
+| Game dump | **Select ISO or Archive** | The archive must contain `default.xex` and `data/webkit/EAWebkit.xex` (USA/Europe retail), either at the top level or inside a single wrapping folder (for example `Skate3/default.xex`). Verification is identical to the ISO path. |
+| Seiyu / character mods | **Characters > Restore Seiyu > Import archive** | Pick one archive with `base.obj` and `texture_diffuse.png` (any folder depth; exact names preferred). Exactly one `base.obj` and one `texture_diffuse.png` are required (any folder depth). Extraction caps: 128 MiB total. |
+| GPU drivers | **Advanced Options > GPU driver experiments > Import driver archive** | Any ADPKG-compatible package. Same metadata, API and ARM64 ELF validation as before, plus the same archive safety rules. |
+
+Safety rules for every archive import: paths are sanitized (absolute paths,
+drive letters and `..` segments are rejected), duplicate entries are rejected,
+symbolic links are skipped, entry counts and total uncompressed size are capped,
+and nested top-level game folders are hoisted automatically. Password-protected
+archives are not supported. `.tar.gz` of a full game dump needs roughly double
+the temporary disk space, so prefer `.zip`, `.7z` or `.rar` for the game itself.
+Windows-made 7z files that use BCJ filters may not open (XZ for Java is not
+bundled); re-save them without BCJ or use `.zip`.
+
+Mod archives picked from streaming-only cloud providers (Drive, Dropbox and
+similar) are spooled through the cache automatically. The game archive flow
+still requires a seekable document, the same as the ISO flow.
+
 ## Experimental custom Turnip driver
 
 On Snapdragon / Adreno devices, open **Advanced Options > GPU driver
-experiments** in the launcher to import an AdrenoTools-compatible driver ZIP.
+experiments** in the launcher to import an AdrenoTools-compatible driver package
+(`.zip`, `.rar`, `.7z`, `.tar`, `.tar.gz` or `.adpkg`).
 The launcher accepts the standard ADPKG layout with `meta.json`, the named
 Vulkan library, and any dependency libraries. It validates the metadata,
 Android API requirement, archive paths, extraction limits, and ARM64 ELF files.

@@ -26,8 +26,8 @@ android {
         applicationId "chat.buku.skate3"
         minSdkVersion 33
         targetSdkVersion 35
-        versionCode 20100
-        versionName "2.1.0"
+        versionCode 20200
+        versionName "2.2.0"
     }
     buildTypes {
         debug {
@@ -71,4 +71,9 @@ android {
 
 dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
+    // Archive support for game dumps, mods and GPU driver packages.
+    // junrar is under the UnRar license; commons-compress/io/lang3 are Apache-2.0.
+    implementation 'com.github.junrar:junrar:8.1.2'
+    implementation 'org.apache.commons:commons-compress:1.27.1'
+    runtimeOnly 'org.slf4j:slf4j-nop:2.0.17'
 }

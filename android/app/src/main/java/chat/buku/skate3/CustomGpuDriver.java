@@ -5,10 +5,9 @@ import android.os.Build;
 
 import org.json.JSONObject;
 
-import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -20,8 +19,6 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.stream.Stream;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 /** Installs an AdrenoTools ADPKG into app-private storage. */
 final class CustomGpuDriver {
@@ -29,9 +26,6 @@ final class CustomGpuDriver {
     private static final String PREFERENCES = "gpu_driver";
     private static final String ACTIVE_DIRECTORY = "active";
     private static final String INSTALL_METADATA = ".skate3-driver.json";
-    private static final int MAX_FILES = 96;
-    private static final long MAX_FILE_SIZE = 192L * 1024 * 1024;
-    private static final long MAX_TOTAL_SIZE = 384L * 1024 * 1024;
     private static final long MAX_METADATA_SIZE = 128L * 1024;
 
     static final class Driver {
@@ -94,7 +88,8 @@ final class CustomGpuDriver {
         }
     }
 
-    static Driver importPackage(Context context, InputStream rawInput) throws IOException {
+    static Driver importPackage(Context context, FileChannel channel, String displayName)
+            throws IOException {
         if (!isLikelyAdrenoDevice()) {
             throw new IOException("Turnip drivers can only be enabled on Snapdragon / Adreno devices.");
         }
@@ -103,7 +98,9 @@ final class CustomGpuDriver {
         Path staging = root.resolve("importing-" + System.nanoTime());
         Files.createDirectory(staging);
         try {
-            extractPackage(rawInput, staging);
+            ArchiveExtractor.extract(channel,
+                (displayName == null || displayName.isEmpty()) ? "driver archive" : displayName,
+                staging, ArchiveExtractor.Limits.forDriver(), null);
             Path packageMetadata = findPackageMetadata(staging);
             JSONObject metadata = readPackageMetadata(packageMetadata);
             validateMetadata(metadata);
@@ -113,7 +110,7 @@ final class CustomGpuDriver {
             Path mainLibrary = packageDirectory.resolve(libraryName).normalize();
             if (!mainLibrary.getParent().equals(packageDirectory) ||
                     !Files.isRegularFile(mainLibrary)) {
-                throw new IOException("The driver ZIP does not contain " + libraryName +
+                throw new IOException("The driver archive does not contain " + libraryName +
                                       " beside meta.json.");
             }
             validateLibraries(staging);
@@ -164,7 +161,7 @@ final class CustomGpuDriver {
         if (!isLikelyAdrenoDevice()) {
             throw new IOException("Turnip is not available on this non-Adreno device.");
         }
-        if (installed(context) == null) throw new IOException("Import a driver ZIP first.");
+        if (installed(context) == null) throw new IOException("Import a driver archive first.");
         context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
             .putBoolean(ENABLED_PREFERENCE, true).apply();
     }
@@ -185,47 +182,6 @@ final class CustomGpuDriver {
         return context.getFilesDir().toPath().resolve("gpu-drivers");
     }
 
-    private static void extractPackage(InputStream rawInput, Path staging) throws IOException {
-        long total = 0;
-        int files = 0;
-        byte[] buffer = new byte[256 * 1024];
-        try (ZipInputStream zip = new ZipInputStream(new BufferedInputStream(rawInput))) {
-            for (ZipEntry entry; (entry = zip.getNextEntry()) != null; zip.closeEntry()) {
-                String name = entry.getName();
-                if (name == null || name.isBlank() || name.indexOf('\0') >= 0 ||
-                        name.contains("\\") || name.startsWith("/") || name.length() > 240) {
-                    throw new IOException("The driver ZIP contains an unsafe path.");
-                }
-                Path target = staging.resolve(name).normalize();
-                if (!target.startsWith(staging)) {
-                    throw new IOException("The driver ZIP contains a path outside the package.");
-                }
-                if (entry.isDirectory()) {
-                    Files.createDirectories(target);
-                    continue;
-                }
-                if (++files > MAX_FILES) throw new IOException("The driver ZIP contains too many files.");
-                if (Files.exists(target)) throw new IOException("The driver ZIP contains duplicate files.");
-                Files.createDirectories(target.getParent());
-                long fileSize = 0;
-                try (OutputStream output = Files.newOutputStream(target, StandardOpenOption.CREATE_NEW)) {
-                    for (;;) {
-                        int read = zip.read(buffer);
-                        if (read < 0) break;
-                        fileSize += read;
-                        total += read;
-                        if (fileSize > MAX_FILE_SIZE || total > MAX_TOTAL_SIZE) {
-                            throw new IOException("The driver ZIP is unexpectedly large.");
-                        }
-                        output.write(buffer, 0, read);
-                    }
-                }
-                if (fileSize == 0) throw new IOException("The driver ZIP contains an empty file.");
-            }
-        }
-        if (files == 0) throw new IOException("The selected file is not a driver ZIP.");
-    }
-
     private static Path findPackageMetadata(Path staging) throws IOException {
         List<Path> matches = new ArrayList<>();
         try (Stream<Path> paths = Files.walk(staging)) {
@@ -234,7 +190,7 @@ final class CustomGpuDriver {
                  .forEach(matches::add);
         }
         if (matches.size() != 1) {
-            throw new IOException("The driver ZIP must contain exactly one meta.json.");
+            throw new IOException("The driver archive must contain exactly one meta.json.");
         }
         return matches.get(0);
     }
@@ -289,7 +245,7 @@ final class CustomGpuDriver {
                 path.toFile().setExecutable(true, true);
             }
         }
-        if (libraries == 0) throw new IOException("The driver ZIP contains no shared libraries.");
+        if (libraries == 0) throw new IOException("The driver archive contains no shared libraries.");
     }
 
     private static void validateArm64Elf(Path path) throws IOException {
